@@ -31,6 +31,80 @@ function pronounGuide(pronoun: PronounKey): string {
   ].join("\n");
 }
 
+/**
+ * Words and phrases the comment must not use. Single source of truth: the STYLE
+ * bullets in SYSTEM_PROMPT below are rendered from these lists, and
+ * scripts/check-sentence-rule.js imports them to lint lib/suggestions.ts. Add a
+ * banned phrase here and both the model and the checker pick it up.
+ *
+ * `phrase` is what the prompt shows the model. `match` is what the checker looks
+ * for, when a broader match is wanted than the phrase itself — "with continued
+ * effort" reads better in the prompt, but the checker should also catch "with
+ * continued practice". Without `match`, the checker matches `phrase` as a whole
+ * word, so short entries like "we" cannot fire on "well".
+ */
+export interface BannedPhrase {
+  phrase: string;
+  match?: string;
+}
+
+export const BANNED_CONNECTORS: BannedPhrase[] = [
+  { phrase: "therefore" },
+  { phrase: "however" },
+  { phrase: "furthermore" },
+  { phrase: "moreover" },
+  { phrase: "consequently" },
+  { phrase: "nevertheless" },
+  { phrase: "in addition" },
+  { phrase: "as a result" },
+];
+
+export const BANNED_PADDING: BannedPhrase[] = [
+  { phrase: "which shows" },
+  { phrase: "consistently" },
+  { phrase: "demonstrate", match: "demonstrat" },
+  { phrase: "demonstrates strong skills", match: "demonstrat" },
+  { phrase: "going forward" },
+  { phrase: "with continued effort", match: "with continued" },
+  { phrase: "on several occasions" },
+  { phrase: "real dedication" },
+];
+
+/** Teacher-voice giveaways, listed in the prompt with "or" before the last. */
+export const BANNED_TEACHER_VOICE: BannedPhrase[] = [
+  { phrase: "I asked" },
+  { phrase: "I had to tell him" },
+  { phrase: "I reminded them" },
+  { phrase: "I pulled him aside" },
+  { phrase: "I have spoken to" },
+  { phrase: "we discussed" },
+];
+
+/** Teacher-voice words, listed separately in the same prompt bullet. */
+export const BANNED_TEACHER_WORDS: BannedPhrase[] = [
+  { phrase: "we" },
+  { phrase: "our class" },
+  { phrase: "my" },
+];
+
+export const BANNED_PHRASES: BannedPhrase[] = [
+  ...BANNED_CONNECTORS,
+  ...BANNED_PADDING,
+  ...BANNED_TEACHER_VOICE,
+  ...BANNED_TEACHER_WORDS,
+];
+
+/** `"a", "b", "c"` — the form the prompt lists these in. */
+function quoted(items: BannedPhrase[]): string {
+  return items.map((b) => `"${b.phrase}"`).join(", ");
+}
+
+/** `"a", "b", or "c"` — same, with "or" before the last item. */
+function quotedOr(items: BannedPhrase[]): string {
+  const q = items.map((b) => `"${b.phrase}"`);
+  return `${q.slice(0, -1).join(", ")}, or ${q[q.length - 1]}`;
+}
+
 export const SYSTEM_PROMPT = `SENTENCE RULE — READ THIS FIRST. It outranks every other instruction below it and applies to every comment you write, in every mode, with every toggle on or off. It has two parts.
 
 PART 1 — ABSOLUTE, no exceptions, regardless of sentence length. Every sentence you write has exactly ONE subject. Never put two subjects in one sentence by joining them with "and", "but", "so", "or", "yet", or a comma. If a second subject appears, that is where the sentence ends — put a period there and start the next one.
@@ -62,9 +136,9 @@ STRUCTURE — always produce exactly these three parts, in this order, as one fl
 STYLE — non-negotiable:
 - Short sentences. One idea per sentence. The SENTENCE RULE at the top of this prompt governs; if a sentence has a comma-clause or an "and" tacked onto it, break it into two sentences instead.
 - Active voice. Say who did what: "They left their workspace messy", never "materials have been found around their workspace".
-- Always write about the STUDENT in the third person. The comment never speaks in the teacher's voice about what the teacher did. Never write "I asked", "I had to tell him", "I reminded them", "I pulled him aside", "I have spoken to", or "we discussed". Rewrite any teacher action as the student's observed behaviour pattern: "This term I asked him to stop chatting with others about unrelated topics" becomes "He has had some difficulty staying on task and can be distracted by conversations with classmates." Never use "we", "our class", or "my" about the teacher either.
-- Do NOT use fancy connectors: no "therefore", "however", "furthermore", "moreover", "consequently", "nevertheless", "in addition", "as a result". Just start a new sentence.
-- Do NOT use padding or formal-sounding phrases: no "which shows", "consistently", "demonstrate", "demonstrates strong skills", "going forward", "with continued effort", "on several occasions", "real dedication". Say the plain thing instead: "always", "shows", "next", "a few times".
+- Always write about the STUDENT in the third person. The comment never speaks in the teacher's voice about what the teacher did. Never write ${quotedOr(BANNED_TEACHER_VOICE)}. Rewrite any teacher action as the student's observed behaviour pattern: "This term I asked him to stop chatting with others about unrelated topics" becomes "He has had some difficulty staying on task and can be distracted by conversations with classmates." Never use ${quotedOr(BANNED_TEACHER_WORDS)} about the teacher either.
+- Do NOT use fancy connectors: no ${quoted(BANNED_CONNECTORS)}. Just start a new sentence.
+- Do NOT use padding or formal-sounding phrases: no ${quoted(BANNED_PADDING)}. Say the plain thing instead: "always", "shows", "next", "a few times".
 - End with a short, simple closing line such as "Keep up the great work!". Do NOT end with a summarizing wrap-up sentence about building on strengths or continued effort.
 - Straightforward, warm, matter-of-fact tone.
 - Always positive and parent-friendly, no matter how blunt or negative the teacher's notes are. Never repeat harsh or judgmental wording. Reframe every weakness as a growth area or next step.

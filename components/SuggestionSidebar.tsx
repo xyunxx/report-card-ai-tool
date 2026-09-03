@@ -6,23 +6,12 @@ import {
   CATEGORY_LABELS,
   PROFILE_LABELS,
   SuggestionCategory,
+  applyPronoun,
 } from "@/lib/suggestions";
-import { PRONOUNS, PronounKey, StudentProfile } from "@/lib/types";
+import { PronounKey, StudentProfile } from "@/lib/types";
 
 const CATEGORIES: SuggestionCategory[] = ["opening", "nextSteps", "closing"];
 const PROFILES: StudentProfile[] = ["strong", "struggling", "behavioral"];
-
-// Fill {They}/{their}/{them}/{themselves} placeholders using the current pronoun.
-function applyPronoun(text: string, pronoun: PronounKey): string {
-  const p = PRONOUNS[pronoun];
-  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-  return text
-    .replace(/\{They\}/g, cap(p.subject))
-    .replace(/\{they\}/g, p.subject)
-    .replace(/\{their\}/g, p.possessive)
-    .replace(/\{them\}/g, p.object)
-    .replace(/\{themselves\}/g, p.reflexive);
-}
 
 export default function SuggestionSidebar({
   pronoun,

@@ -56,7 +56,11 @@ https://console.anthropic.com/.
 - `lib/prompt.ts` — the system prompt, the per-request prompt builder (structure,
   style rules, pronouns, difficult-case / French-Immersion modes, evidence), and
   `GENERATION_CONFIG` (model + `max_tokens`), shared with the check script.
-- `lib/suggestions.ts` — the sidebar library.
+- `lib/suggestions.ts` — the sidebar library, plus `applyPronoun`. Suggestions
+  drop into the teacher's *notes*, so they are input to the generator rather
+  than final output, but they follow the same style rules so the model is not
+  fed phrasing it then has to undo. Each suggestion belongs to exactly one
+  profile; the check script fails on overlap.
 - `lib/weakness.ts` — heuristic that decides when to prompt for an example.
 - `scripts/check-sentence-rule.js` — regression check for the sentence rule
   (see below). Run it after editing the system prompt.
@@ -76,13 +80,29 @@ node scripts/check-sentence-rule.js --trials 3 # quicker
 node scripts/check-sentence-rule.js --self-test  # no API calls
 ```
 
-It generates real comments with difficult-case mode off and on, then checks
-every sentence. It exits non-zero on a hard-rule violation, a comment broken
-into multiple paragraphs, or a truncated comment. Soft warnings (sentences over
-14 words, total outside 90-160) are printed but do not fail the run.
+It does two things:
+
+1. **Lints the suggestion library** in `lib/suggestions.ts` against the same
+   style rules — clause joins, banned connectors and padding, teacher voice,
+   verb agreement across all three pronouns, and profile overlap. Deterministic
+   and free, so it also runs under `--self-test`.
+2. **Generates real comments** with difficult-case mode off and on, then checks
+   every sentence.
+
+It exits non-zero on a hard-rule violation, a comment broken into multiple
+paragraphs, a truncated comment, or a suggestion-library violation. Soft
+warnings (sentences over 14 words, total outside 90-160) are printed but do not
+fail the run.
 
 One generation is not enough to trust — failures showed up at roughly a 1-in-10
 rate while this rule was being tuned, so a single clean sample proves nothing.
+
+Banned words and phrases have one home: `BANNED_PHRASES` in `lib/prompt.ts`. The
+STYLE bullets of `SYSTEM_PROMPT` are rendered from it, and the check script
+imports it, so adding a phrase there covers both the model and the linter. Each
+entry's `match` field broadens what the checker looks for when the prompt's
+wording is narrower than the rule — `"with continued effort"` reads better in the
+prompt, but the checker also needs to catch `"with continued practice"`.
 
 Two things learned tuning this rule, worth keeping in mind before editing:
 

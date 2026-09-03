@@ -144,33 +144,169 @@ const SELF_TEST_CASES = [
   [false, "This term, he has grown more confident in group work."],
 ];
 
-function runSelfTest() {
+// Guards the two properties the BannedPhrase `phrase`/`match` split exists for:
+// a `match` broadens beyond the prompt's wording, and a bare `phrase` is matched
+// as a whole word so "we" cannot fire on "well".
+const MATCHER_TEST_CASES = [
+  [true,  "With continued practice, he will keep growing as a learner."],
+  [true,  "It is a pleasure to have him in our class."],
+  [true,  "He demonstrates strong skills in math."],
+  [true,  "My notes say we discussed it."],
+  [false, "He responds well to encouragement each week."],
+  [false, "It is a pleasure to have him in class."],
+  [false, "He owns his mistakes and starts again."],
+];
+
+function runSelfTest(lib) {
   let bad = 0;
   for (const [shouldFlag, text] of SELF_TEST_CASES) {
     const flagged = splitSentences(text).flatMap(findClauseJoins).length > 0;
     if (flagged !== shouldFlag) {
       bad++;
-      console.error(`  WRONG (expected ${shouldFlag ? "violation" : "ok"}): ${text}`);
+      console.error(`  WRONG clause-join (expected ${shouldFlag ? "violation" : "ok"}): ${text}`);
     }
   }
+
+  const matchers = bannedMatchers(lib.BANNED_PHRASES);
+  for (const [shouldFlag, text] of MATCHER_TEST_CASES) {
+    const flagged = matchers.some((m) => m.test(text));
+    if (flagged !== shouldFlag) {
+      bad++;
+      console.error(`  WRONG banned-phrase (expected ${shouldFlag ? "violation" : "ok"}): ${text}`);
+    }
+  }
+
+  const total = SELF_TEST_CASES.length + MATCHER_TEST_CASES.length;
   if (bad) {
-    console.error(`detector self-test: ${bad} of ${SELF_TEST_CASES.length} wrong`);
+    console.error(`detector self-test: ${bad} of ${total} wrong`);
     process.exit(1);
   }
-  console.log(`detector self-test: all ${SELF_TEST_CASES.length} correct`);
+  console.log(`detector self-test: all ${total} correct (${SELF_TEST_CASES.length} clause-join, ${MATCHER_TEST_CASES.length} banned-phrase)`);
+}
+
+// ------------------------------------------------------- suggestion library
+
+// The banned words and phrases come from BANNED_PHRASES in lib/prompt.ts, the
+// same list the STYLE bullets of SYSTEM_PROMPT are rendered from — so a phrase
+// added there is enforced here with no second copy to keep in sync.
+//
+// An entry's `match` is used as a substring when present ("with continued
+// effort" in the prompt, but "with continued" here so it also catches "with
+// continued practice"). Otherwise the phrase is matched as a whole word, which
+// keeps short entries like "we" from firing on "well".
+function bannedMatchers(bannedPhrases) {
+  return bannedPhrases.map((b) => ({
+    label: b.phrase,
+    test: b.match
+      ? (text) => text.toLowerCase().includes(b.match.toLowerCase())
+      : (text) => new RegExp(`\\b${b.phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text),
+  }));
+}
+
+// Verbs that need an {s}/{es} agreement placeholder. "He come to class" is the
+// failure this catches.
+const BARE_VERBS = [
+  "come", "work", "approach", "stick", "keep", "grow", "respond", "try",
+  "bring", "set", "finish", "put", "take", "build", "handle", "listen",
+  "make", "feel", "show", "need", "want", "help", "ask", "start", "use",
+  "practise", "share", "learn", "settle", "manage", "check", "give",
+];
+
+const PRONOUN_KEYS = ["he", "she", "they"];
+
+function lintSuggestions(lib) {
+  const { SUGGESTIONS, applyPronoun, BANNED_PHRASES } = lib;
+  const matchers = bannedMatchers(BANNED_PHRASES);
+  const fails = [];
+  const warns = [];
+  let count = 0;
+
+  const bareVerbRe = new RegExp(`\\b(he|she) (${BARE_VERBS.join("|")})\\b`, "i");
+  const pluralRe = /\bthey (is|has|does|was)\b/i;
+
+  for (const [cat, items] of Object.entries(SUGGESTIONS)) {
+    // Overlap: a suggestion must belong to exactly one profile, so switching
+    // profile in the sidebar shows a genuinely different list.
+    for (const item of items) {
+      if (item.profiles.length !== 1) {
+        fails.push(`${cat}/${item.id} — listed under ${item.profiles.length} profiles (${item.profiles.join(", ")}); each suggestion should belong to exactly one`);
+      }
+    }
+
+    // Identical text reused across entries.
+    const seen = new Map();
+    for (const item of items) {
+      if (seen.has(item.text)) {
+        fails.push(`${cat}/${item.id} — duplicate text of ${seen.get(item.text)}`);
+      }
+      seen.set(item.text, item.id);
+    }
+
+    for (const item of items) {
+      count++;
+      for (const key of PRONOUN_KEYS) {
+        const rendered = applyPronoun(item.text, key);
+
+        const leftover = rendered.match(/\{[^}]*\}/g);
+        if (leftover) {
+          fails.push(`${cat}/${item.id} [${key}] — unresolved placeholder ${leftover.join(", ")}`);
+        }
+
+        for (const hit of findClauseJoins(rendered)) {
+          fails.push(`${cat}/${item.id} [${key}] — PART 1 ${hit}`);
+        }
+
+        for (const m of matchers) {
+          if (m.test(rendered)) {
+            fails.push(`${cat}/${item.id} [${key}] — banned phrase "${m.label}": "${rendered}"`);
+          }
+        }
+
+        const agree = key === "they" ? pluralRe.exec(rendered) : bareVerbRe.exec(rendered);
+        if (agree) {
+          fails.push(`${cat}/${item.id} [${key}] — verb agreement "${agree[0]}": "${rendered}"`);
+        }
+
+        const w = wordCount(rendered);
+        if (w > 14) warns.push(`${cat}/${item.id} [${key}] — ${w}w: "${rendered}"`);
+      }
+    }
+  }
+
+  // Report how distinct the profiles actually are.
+  console.log(`\nsuggestion library — ${count} suggestions`);
+  for (const [cat, items] of Object.entries(SUGGESTIONS)) {
+    const byProfile = {};
+    for (const item of items) {
+      for (const pr of item.profiles) (byProfile[pr] ||= []).push(item.id);
+    }
+    const counts = Object.entries(byProfile)
+      .map(([pr, ids]) => `${pr}:${ids.length}`).join("  ");
+    const shared = items.filter((i) => i.profiles.length > 1).length;
+    console.log(`  ${cat.padEnd(10)} ${counts}   shared across profiles: ${shared}`);
+  }
+
+  for (const f of fails) console.log(`  !! ${f}`);
+  for (const w of warns) console.log(`   ~ ${w}`);
+  console.log(fails.length ? `  ${fails.length} violation(s)` : "  clean");
+
+  return fails.length;
 }
 
 // --------------------------------------------------------------------- runner
 
-function loadPrompt() {
+function loadLib() {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), "sentence-rule-"));
   execFileSync(
     path.join(ROOT, "node_modules/.bin/tsc"),
-    ["lib/prompt.ts", "lib/types.ts", "--outDir", out,
+    ["lib/prompt.ts", "lib/types.ts", "lib/suggestions.ts", "--outDir", out,
      "--module", "commonjs", "--target", "es2020", "--skipLibCheck"],
     { cwd: ROOT, stdio: "inherit" },
   );
-  return require(path.join(out, "prompt.js"));
+  return {
+    ...require(path.join(out, "prompt.js")),
+    ...require(path.join(out, "suggestions.js")),
+  };
 }
 
 function loadApiKey() {
@@ -182,13 +318,25 @@ function loadApiKey() {
 }
 
 async function main() {
-  runSelfTest();
-  if (process.argv.includes("--self-test")) return;
+  const lib = loadLib();
+  runSelfTest(lib);
+  const suggestionFails = lintSuggestions(lib);
+
+  // The library lint is deterministic and free, so it also runs under
+  // --self-test, which makes no API calls.
+  if (process.argv.includes("--self-test")) {
+    if (suggestionFails) {
+      console.error("\nFAILED — the suggestion library violates the style rules.");
+      process.exit(1);
+    }
+    console.log("\nPASSED — suggestion library is clean.");
+    return;
+  }
 
   const argIdx = process.argv.indexOf("--trials");
   const TRIALS = argIdx > -1 ? Number(process.argv[argIdx + 1]) : 5;
 
-  const { SYSTEM_PROMPT, buildUserPrompt, GENERATION_CONFIG } = loadPrompt();
+  const { SYSTEM_PROMPT, buildUserPrompt, GENERATION_CONFIG } = lib;
   const Anthropic = require(path.join(ROOT, "node_modules/@anthropic-ai/sdk")).default;
   const client = new Anthropic({ apiKey: loadApiKey() });
 
@@ -209,7 +357,7 @@ async function main() {
     return "";
   }
 
-  let totalFails = 0;
+  let totalFails = suggestionFails;
   let totalWarns = 0;
   let totalSentences = 0;
 
